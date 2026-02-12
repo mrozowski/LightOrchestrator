@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 public final class Orchestrator {
 
@@ -48,6 +49,23 @@ public final class Orchestrator {
       return this;
     }
 
+    public <T> Builder step(Key<T> key,
+                            Supplier<T> supplier) {
+      return step(key, supplier, StepOptions.defaults());
+    }
+
+    public <T> Builder step(Key<T> key,
+                            Supplier<T> supplier,
+                            StepOptions options) {
+      StepDefinition def = new StepDefinition(
+          key.name(),
+          key,
+          ctx -> supplier.get(),
+          options);
+      steps.add(def);
+      return this;
+    }
+
     public Builder step(String name, Consumer<OrchestrationContext> consumer) {
       return step(name, consumer, StepOptions.defaults());
     }
@@ -58,6 +76,24 @@ public final class Orchestrator {
           null,
           ctx -> {
             consumer.accept(ctx);
+            return null;
+          },
+          options
+      );
+      steps.add(def);
+      return this;
+    }
+
+    public Builder step(String name, Runnable runnable) {
+      return step(name, runnable, StepOptions.defaults());
+    }
+
+    public Builder step(String name, Runnable runnable, StepOptions options) {
+      StepDefinition def = new StepDefinition(
+          name,
+          null,
+          ctx -> {
+            runnable.run();
             return null;
           },
           options

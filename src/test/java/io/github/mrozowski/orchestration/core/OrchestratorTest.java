@@ -1,6 +1,5 @@
 package io.github.mrozowski.orchestration.core;
 
-
 import io.github.mrozowski.orchestration.*;
 import org.junit.jupiter.api.Test;
 
