@@ -4,7 +4,10 @@ import io.github.mrozowski.orchestration.*;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -178,20 +181,7 @@ public class OrchestratorTest {
   void should_invoke_listener_methods_in_correct_lifecycle_order() {
     // Given
     List<String> events = new ArrayList<>();
-
-    OrchestrationListener listener = new OrchestrationListener() {
-      public void beforeStep(String name, OrchestrationContext ctx) {
-        events.add("before:" + name);
-      }
-
-      public void afterStep(String name, OrchestrationContext ctx) {
-        events.add("after:" + name);
-      }
-
-      public void onFailure(String name, Throwable ex, OrchestrationContext ctx) {
-        events.add("failure:" + name);
-      }
-    };
+    OrchestrationListener listener = new TestListener(events);
 
     var orchestrator = Orchestrator.builder()
         .listener(listener)
@@ -239,5 +229,99 @@ public class OrchestratorTest {
     assertEquals(OrchestrationResult.Status.SUCCESS, result.status());
     assertEquals(1, result.steps().size());
     assertTrue(result.steps().getFirst().success());
+  }
+
+
+  @Test
+  void should_execute_steps_in_parallel() {
+    // Given
+    AtomicInteger running = new AtomicInteger(0);
+    AtomicInteger maxRunning = new AtomicInteger(0);
+    CyclicBarrier barrier = new CyclicBarrier(2);
+
+    var orchestrator = Orchestrator.builder()
+//        .step("step-1", ctx -> {stepHelper(running, maxRunning, barrier);})
+//        .step("step-2", ctx -> {stepHelper(running, maxRunning, barrier);})
+        .parallelSteps(p -> {
+          p.step("step-1", ctx -> stepHelper(running, maxRunning, barrier));
+          p.step("step-2", ctx -> stepHelper(running, maxRunning, barrier));
+        })
+        .build();
+
+    // When
+    var result = orchestrator.execute();
+
+    // Then
+    assertEquals(SUCCESS, result.status());
+    assertEquals(2, result.steps().size());
+    assertTrue(result.steps().get(0).success());
+    assertTrue(result.steps().get(1).success());
+
+    // If sequential, test will deadlock at barrier and fail after 1s
+    assertTrue(maxRunning.get() > 1);
+  }
+
+  @Test
+  void should_invoke_listener_when_running_parallel_steps() {
+    // Given
+    List<String> events = Collections.synchronizedList(new ArrayList<>());
+    OrchestrationListener listener = new TestListener(events);
+
+    var orchestrator = Orchestrator.builder()
+        .listener(listener)
+        .parallelSteps(p -> {
+          p.step("ok", ctx -> {});
+          p.step("fail", ctx -> {
+            throw new IllegalStateException();
+          });
+        })
+        .build();
+
+    // When
+    orchestrator.execute();
+
+    // Then
+    assertEquals(4, events.size());
+
+    assertTrue(events.contains("before:ok"));
+    assertTrue(events.contains("after:ok"));
+    assertTrue(events.contains("before:fail"));
+    assertTrue(events.contains("failure:fail"));
+  }
+
+  private static void stepHelper(AtomicInteger running, AtomicInteger maxRunning, CyclicBarrier barrier) {
+    int current = running.incrementAndGet();
+    maxRunning.updateAndGet(prev -> Math.max(prev, current));
+
+    try {
+      barrier.await(1, TimeUnit.SECONDS);
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+
+    running.decrementAndGet();
+  }
+
+  private static class TestListener implements OrchestrationListener {
+    private final List<String> events;
+
+    TestListener(List<String> events) {
+      this.events = events;
+    }
+
+    @Override
+    public void beforeStep(String name, OrchestrationContext ctx) {
+      events.add("before:" + name);
+    }
+
+    @Override
+    public void afterStep(String name, OrchestrationContext ctx) {
+      events.add("after:" + name);
+    }
+
+    @Override
+    public void onFailure(String name, Throwable ex, OrchestrationContext ctx) {
+      events.add("failure:" + name);
+    }
   }
 }
