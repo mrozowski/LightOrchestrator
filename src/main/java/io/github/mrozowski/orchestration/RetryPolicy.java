@@ -12,7 +12,7 @@ public final class RetryPolicy {
   private RetryPolicy(int maxAttempts,
                       Set<Class<? extends Throwable>> retryOn,
                       Duration backoff) {
-    this.maxAttempts = maxAttempts;
+    this.maxAttempts = Math.max(1, maxAttempts);
     this.retryOn = retryOn;
     this.backoff = backoff;
   }
@@ -22,7 +22,7 @@ public final class RetryPolicy {
   }
 
   public static RetryPolicy fixed(int maxAttempts, Duration backoff) {
-    return new RetryPolicy(maxAttempts, Set.of(), backoff);
+    return new RetryPolicy(Math.max(1, maxAttempts), Set.of(), backoff);
   }
 
   public int maxAttempts() {

@@ -85,7 +85,7 @@ public class OrchestratorTest {
     // Then
     assertEquals(SUCCESS, result.status());
 
-    StepExecution execution = result.steps().getFirst();
+    StepExecutionMetadata execution = result.steps().getFirst();
     assertTrue(execution.success());
     assertEquals(3, execution.attempts());
     assertEquals(3, counter.get());
@@ -114,7 +114,7 @@ public class OrchestratorTest {
 
     assertEquals(2, result.steps().size());
 
-    StepExecution failedStep = result.steps().get(1);
+    StepExecutionMetadata failedStep = result.steps().get(1);
     assertFalse(failedStep.success());
     assertNotNull(failedStep.exception());
 
@@ -171,7 +171,7 @@ public class OrchestratorTest {
     assertEquals(OrchestrationResult.Status.FAILED, result.status());
     assertEquals(3, attempts.get());
 
-    StepExecution execution = result.steps().getFirst();
+    StepExecutionMetadata execution = result.steps().getFirst();
     assertEquals(3, execution.attempts());
     assertFalse(execution.success());
     assertNotNull(execution.exception());

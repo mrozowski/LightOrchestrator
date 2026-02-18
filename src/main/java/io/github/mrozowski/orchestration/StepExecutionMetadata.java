@@ -2,7 +2,7 @@ package io.github.mrozowski.orchestration;
 
 import java.time.Instant;
 
-public record StepExecution(
+public record StepExecutionMetadata(
     String stepName,
     Instant startTime,
     Instant endTime,

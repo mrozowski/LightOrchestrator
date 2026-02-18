@@ -7,10 +7,14 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 
 final class OrchestrationExecutor {
 
-  private OrchestrationExecutor() {}
+  private static final System.Logger log = System.getLogger(OrchestrationExecutor.class.getName());
+
+  private OrchestrationExecutor() {
+  }
 
   static OrchestrationResult execute(
       List<List<StepDefinition>> stepSequence,
@@ -22,84 +26,101 @@ final class OrchestrationExecutor {
     Objects.requireNonNull(listeners);
     Objects.requireNonNull(context);
 
-    ExecutorService exec =
-        executor != null ? executor : Executors.newVirtualThreadPerTaskExecutor();
+    boolean shutdownExecutor = false;
+    ExecutorService exec = executor;
 
-    List<StepExecution> executions = new ArrayList<>();
+    if (exec == null) {
+      // If executor is not provided we create default one that must be shutdown once orchestration is finished
+      exec = Executors.newVirtualThreadPerTaskExecutor();
+      shutdownExecutor = true;
+    }
+
+    List<StepExecutionMetadata> executions = new ArrayList<>();
     boolean anyFailure = false;
     boolean stopped = false;
 
-    outer:
-    for (List<StepDefinition> group : stepSequence) {
+    try {
+      for (List<StepDefinition> group : stepSequence) {
 
-      if (group.size() == 1) {
-        // ---- Sequential ----
-        StepResult result =
-            executeSingleStep(group.get(0), listeners, context);
+        GroupResult groupResult = executeGroup(group, listeners, context, exec);
+        executions.addAll(groupResult.executions());
 
-        executions.add(result.execution);
-
-        if (!result.success) {
+        if (groupResult.anyFailure()) {
           anyFailure = true;
-          if (result.stop) {
-            stopped = true;
-            break;
-          }
         }
 
-      } else {
-        // ---- Parallel ----
-        List<Callable<StepResult>> tasks = new ArrayList<>();
-
-        for (StepDefinition step : group) {
-          tasks.add(() -> executeSingleStep(step, listeners, context));
-        }
-
-        try {
-          List<Future<StepResult>> futures = exec.invokeAll(tasks);
-
-          for (Future<StepResult> future : futures) {
-            StepResult result = future.get();
-
-            executions.add(result.execution);
-
-            if (!result.success) {
-              anyFailure = true;
-              if (result.stop) {
-                stopped = true;
-              }
-            }
-          }
-
-          if (stopped) {
-            break;
-          }
-
-        } catch (InterruptedException ie) {
-          Thread.currentThread().interrupt();
+        if (groupResult.stopped()) {
           stopped = true;
-          anyFailure = true;
-          break;
-        } catch (ExecutionException ee) {
-          stopped = true;
-          anyFailure = true;
           break;
         }
       }
+
+    } finally {
+      if (shutdownExecutor) {
+        exec.shutdown();
+      }
     }
 
-    OrchestrationResult.Status status;
-
-    if (!anyFailure) {
-      status = OrchestrationResult.Status.SUCCESS;
-    } else if (stopped) {
-      status = OrchestrationResult.Status.FAILED;
-    } else {
-      status = OrchestrationResult.Status.PARTIAL;
-    }
+    OrchestrationResult.Status status = getStatus(anyFailure, stopped);
 
     return new OrchestrationResult(status, context, executions);
   }
+
+  private static GroupResult executeGroup(
+      List<StepDefinition> group,
+      List<OrchestrationListener> listeners,
+      OrchestrationContext context,
+      ExecutorService exec) {
+
+    // Sequential step
+    if (group.size() == 1) {
+      StepResult result = executeSingleStep(group.getFirst(), listeners, context);
+      return GroupResult.of(result);
+    }
+
+    // If group contains multiple steps process them in parallel
+    return executeParallelSteps(group, listeners, context, exec);
+  }
+
+  private static GroupResult executeParallelSteps(List<StepDefinition> group, List<OrchestrationListener> listeners, OrchestrationContext context, ExecutorService exec) {
+    List<Callable<StepResult>> tasks = new ArrayList<>(group.size());
+
+    // List of steps to process in parallel
+    for (StepDefinition step : group) {
+      tasks.add(() -> executeSingleStep(step, listeners, context));
+    }
+
+    List<StepExecutionMetadata> stepExecutions = new ArrayList<>(group.size());
+    boolean anyFailure = false;
+    boolean stopped = false;
+
+    try {
+      List<Future<StepResult>> futures = exec.invokeAll(tasks);
+
+      for (Future<StepResult> future : futures) {
+        StepResult result = future.get();
+        stepExecutions.add(result.execution());
+
+        if (!result.success()) {
+          anyFailure = true;
+          if (result.stop()) {
+            stopped = true;
+          }
+        }
+      }
+
+    } catch (InterruptedException ie) {
+      Thread.currentThread().interrupt();
+      anyFailure = true;
+      stopped = true;
+    } catch (ExecutionException ee) {
+      anyFailure = true;
+      stopped = true;
+    }
+
+    return new GroupResult(stepExecutions, anyFailure, stopped);
+  }
+
 
   private static StepResult executeSingleStep(
       StepDefinition step,
@@ -110,25 +131,22 @@ final class OrchestrationExecutor {
     StepOptions options = step.options();
     RetryPolicy retryPolicy = options.retryPolicy();
 
-    Instant start = Instant.now();
-    Throwable finalException = null;
+    int maxAttempts = retryPolicy.maxAttempts();
+
+    Exception finalException = null;
     boolean success = false;
     boolean stop = false;
     int attempts = 0;
 
-    for (OrchestrationListener listener : listeners) {
-      try {
-        listener.beforeStep(stepName, context);
-      } catch (Throwable ignored) {}
-    }
-
-    int maxAttempts = retryPolicy.maxAttempts();
+    notifyListeners(listeners, stepName, l -> l.beforeStep(stepName, context));
+    Instant start = Instant.now();
 
     while (attempts < maxAttempts) {
       attempts++;
       try {
         Object result = step.body().apply(context);
 
+        // if step produce result - add it to the context
         if (step.key() != null) {
           @SuppressWarnings("unchecked")
           Key<Object> key = (Key<Object>) step.key();
@@ -138,7 +156,7 @@ final class OrchestrationExecutor {
         success = true;
         break;
 
-      } catch (Throwable ex) {
+      } catch (Exception ex) {
         finalException = ex;
 
         boolean retryable = isRetryable(ex, retryPolicy);
@@ -162,34 +180,49 @@ final class OrchestrationExecutor {
     Instant end = Instant.now();
 
     if (success) {
-      for (OrchestrationListener listener : listeners) {
-        try {
-          listener.afterStep(stepName, context);
-        } catch (Throwable ignored) {}
-      }
+      notifyListeners(listeners, stepName, l -> l.afterStep(stepName, context));
     } else {
-      for (OrchestrationListener listener : listeners) {
-        try {
-          listener.onFailure(stepName, finalException, context);
-        } catch (Throwable ignored) {}
-      }
+      final Exception e = finalException;
+      notifyListeners(listeners, stepName, l -> l.onFailure(stepName, e, context));
 
-      FailureStrategy strategy =
-          options.failureHandler().apply(finalException, context);
-
+      FailureStrategy strategy = options.failureHandler().apply(finalException, context);
       if (strategy == FailureStrategy.STOP) {
         stop = true;
       }
     }
 
-    StepExecution execution =
-        new StepExecution(stepName, start, end, success,
-            success ? null : finalException, attempts);
+    StepExecutionMetadata execution = new StepExecutionMetadata(
+        stepName, start, end, success, success ? null : finalException, attempts);
 
     return new StepResult(execution, success, stop);
   }
 
-  private static boolean isRetryable(Throwable ex, RetryPolicy policy) {
+  private static OrchestrationResult.Status getStatus(boolean anyFailure, boolean stopped) {
+    if (!anyFailure) {
+      return OrchestrationResult.Status.SUCCESS;
+    } else if (stopped) {
+      return OrchestrationResult.Status.FAILED;
+    } else {
+      return OrchestrationResult.Status.PARTIAL;
+    }
+  }
+
+  private static void notifyListeners(List<OrchestrationListener> listeners, String stepName, Consumer<OrchestrationListener> action) {
+    for (OrchestrationListener listener : listeners) {
+      try {
+        action.accept(listener);
+      } catch (Exception ex) {
+        log.log(System.Logger.Level.WARNING,
+            "Listener {0} failed for step {1}: {2}",
+            listener.getClass().getName(),
+            stepName,
+            ex.toString());
+      }
+    }
+  }
+
+
+  private static boolean isRetryable(Exception ex, RetryPolicy policy) {
     Set<Class<? extends Throwable>> retryOn = policy.retryOn();
 
     if (retryOn.isEmpty()) {
@@ -205,7 +238,21 @@ final class OrchestrationExecutor {
   }
 
   private record StepResult(
-      StepExecution execution,
+      StepExecutionMetadata execution,
       boolean success,
-      boolean stop) {}
+      boolean stop) {
+  }
+
+  private record GroupResult(
+      List<StepExecutionMetadata> executions,
+      boolean anyFailure,
+      boolean stopped) {
+
+    static GroupResult of(StepResult result) {
+      return new GroupResult(
+          List.of(result.execution()),
+          !result.success(),
+          result.stop());
+    }
+  }
 }

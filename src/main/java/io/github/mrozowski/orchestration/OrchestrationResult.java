@@ -2,7 +2,7 @@ package io.github.mrozowski.orchestration;
 
 import java.util.List;
 
-public record OrchestrationResult(Status status, OrchestrationContext context, List<StepExecution> steps) {
+public record OrchestrationResult(Status status, OrchestrationContext context, List<StepExecutionMetadata> steps) {
 
   public enum Status {
     SUCCESS,
@@ -12,7 +12,7 @@ public record OrchestrationResult(Status status, OrchestrationContext context, L
 
   public OrchestrationResult(Status status,
                              OrchestrationContext context,
-                             List<StepExecution> steps) {
+                             List<StepExecutionMetadata> steps) {
     this.status = status;
     this.context = context;
     this.steps = List.copyOf(steps);
