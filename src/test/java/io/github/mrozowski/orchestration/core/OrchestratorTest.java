@@ -127,8 +127,7 @@ public class OrchestratorTest {
     AtomicBoolean thirdExecuted = new AtomicBoolean(false);
 
     var orchestrator = Orchestrator.builder()
-        .step("step-1", ctx -> {
-        })
+        .step("step-1", ctx -> {})
         .step("step-2", ctx -> {
               throw new IllegalStateException("boom");
             },
@@ -270,7 +269,8 @@ public class OrchestratorTest {
     var orchestrator = Orchestrator.builder()
         .listener(listener)
         .parallelSteps(p -> {
-          p.step("ok", ctx -> {});
+          p.step("ok", ctx -> {
+          });
           p.step("fail", ctx -> {
             throw new IllegalStateException();
           });
@@ -315,12 +315,12 @@ public class OrchestratorTest {
     }
 
     @Override
-    public void afterStep(String name, OrchestrationContext ctx) {
+    public void afterStep(String name, OrchestrationContext ctx, StepExecutionMetadata metadata) {
       events.add("after:" + name);
     }
 
     @Override
-    public void onFailure(String name, Throwable ex, OrchestrationContext ctx) {
+    public void onFailure(String name, Throwable ex, OrchestrationContext ctx, StepExecutionMetadata metadata) {
       events.add("failure:" + name);
     }
   }

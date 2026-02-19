@@ -178,12 +178,16 @@ final class OrchestrationExecutor {
     }
 
     Instant end = Instant.now();
+    StepExecutionMetadata stepMetadata;
+
 
     if (success) {
-      notifyListeners(listeners, stepName, l -> l.afterStep(stepName, context));
+      stepMetadata = StepExecutionMetadata.success(stepName, start, end, attempts);
+      notifyListeners(listeners, stepName, l -> l.afterStep(stepName, context, stepMetadata));
     } else {
       final Exception e = finalException;
-      notifyListeners(listeners, stepName, l -> l.onFailure(stepName, e, context));
+      stepMetadata = StepExecutionMetadata.failed(stepName, start, end, attempts, e);
+      notifyListeners(listeners, stepName, l -> l.onFailure(stepName, e, context, stepMetadata));
 
       FailureStrategy strategy = options.failureHandler().apply(finalException, context);
       if (strategy == FailureStrategy.STOP) {
@@ -191,10 +195,7 @@ final class OrchestrationExecutor {
       }
     }
 
-    StepExecutionMetadata execution = new StepExecutionMetadata(
-        stepName, start, end, success, success ? null : finalException, attempts);
-
-    return new StepResult(execution, success, stop);
+    return new StepResult(stepMetadata, success, stop);
   }
 
   private static OrchestrationResult.Status getStatus(boolean anyFailure, boolean stopped) {

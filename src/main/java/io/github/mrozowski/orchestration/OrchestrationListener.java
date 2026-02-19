@@ -6,9 +6,11 @@ public interface OrchestrationListener {
                           OrchestrationContext context) {}
 
   default void afterStep(String stepName,
-                         OrchestrationContext context) {}
+                         OrchestrationContext context,
+                         StepExecutionMetadata stepMetadata) {}
 
   default void onFailure(String stepName,
                          Throwable exception,
-                         OrchestrationContext context) {}
+                         OrchestrationContext context,
+                         StepExecutionMetadata stepMetadata) {}
 }
