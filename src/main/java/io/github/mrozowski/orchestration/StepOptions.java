@@ -1,5 +1,6 @@
 package io.github.mrozowski.orchestration;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.function.BiFunction;
 
@@ -24,6 +25,12 @@ public final class StepOptions {
   public static StepOptions retry(int attempts) {
     return builder()
         .retryPolicy(RetryPolicy.fixed(attempts, java.time.Duration.ZERO))
+        .build();
+  }
+
+  public static StepOptions retry(int attempts, Duration backoff) {
+    return builder()
+        .retryPolicy(RetryPolicy.fixed(attempts, backoff))
         .build();
   }
 
